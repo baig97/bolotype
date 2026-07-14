@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Protocol
 
 DEFAULT_SYSTEM_PROMPT = """You are the transcript-cleaning layer of a real-time dictation application.
@@ -26,7 +25,6 @@ Do not include reasoning, analysis, explanations, XML tags, labels, preambles,
 or quotation marks. Your entire response must be the final replacement text.
 """
 
-PROMPT_FILE = "system_prompt.txt"
 
 
 class ChatCompletionsClient(Protocol):
@@ -59,16 +57,6 @@ class TranscriptPolisher:
         *,
         client: ChatCompletionsClient | None = None,
     ) -> None:
-        # If no custom prompt was passed, try loading from the prompt file next
-        # to the project root so users can edit it without touching source code.
-        if config.system_prompt == DEFAULT_SYSTEM_PROMPT:
-            prompt_path = Path(__file__).parent.parent / PROMPT_FILE
-            if prompt_path.is_file():
-                loaded = prompt_path.read_text(encoding="utf-8").strip()
-                if loaded:
-                    import dataclasses
-                    config = dataclasses.replace(config, system_prompt=loaded)
-
         self.config = config
         if client is not None:
             self.client = client

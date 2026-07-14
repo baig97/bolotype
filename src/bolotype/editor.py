@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 
-from .backends import TextBackend
+from .input.linux import TextBackend
 
 
 # ---------------------------------------------------------------------------

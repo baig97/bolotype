@@ -1,2 +1,0 @@
-moonshine-voice
-openai>=1.0

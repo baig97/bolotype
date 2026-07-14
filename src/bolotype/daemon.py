@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import queue
+import shutil
 import signal
 import socket
 import sys
@@ -11,42 +11,63 @@ import traceback
 import threading
 from pathlib import Path
 
-from moonshine_voice import MicTranscriber, TranscriptEventListener, get_model_for_language
-
-from .accessibility import AccessibilityError, LinuxAccessibilityTextSurface, PolishSnapshot
-from .backends import InjectionError, choose_backend
+from .accessibility.linux_atspi import AccessibilityError, LinuxAccessibilityTextSurface, PolishSnapshot
+from .input.linux import InjectionError, choose_backend
 from .editor import (
     PolishCommand, PolishTarget, VoiceEditor,
     current_line_span, current_paragraph_span, selection_span,
 )
 from .llm import LLMConfig, TranscriptPolisher
 
-DEFAULT_SOCKET = Path(os.environ.get("MOONSHINE_VOICE_SOCKET", str(Path.home() / ".cache" / "moonshine-voice-typing.sock")))
+DEFAULT_SOCKET = Path(os.environ.get(
+    "BOLOTYPE_SOCKET",
+    os.environ.get("MOONSHINE_VOICE_SOCKET", str(Path.home() / ".cache" / "bolotype.sock"))
+))
 
 
-class AppListener(TranscriptEventListener):
-    def __init__(self, app: "VoiceTypingDaemon") -> None:
-        self.app = app
+class MissingDependencyError(RuntimeError):
+    pass
 
-    def on_line_started(self, event) -> None:
-        self.app.latest_partial = event.line.text or ""
-        self.app.log_partial()
 
-    def on_line_text_changed(self, event) -> None:
-        self.app.latest_partial = event.line.text or ""
-        self.app.log_partial()
+def check_runtime_deps() -> None:
+    missing_cmds = []
+    for cmd in ("xdotool", "xclip"):
+        if not shutil.which(cmd):
+            missing_cmds.append(cmd)
 
-    def on_line_completed(self, event) -> None:
-        text = (event.line.text or "").strip()
-        self.app.latest_partial = ""
-        if text:
-            self.app.events.put(("transcript", text))
+    missing_mods = []
+    try:
+        import pyatspi  # noqa: F401
+    except ImportError:
+        missing_mods.append("pyatspi")
+
+    if missing_cmds or missing_mods:
+        lines = ["BoloType Linux integration is not fully installed.\n"]
+        for cmd in missing_cmds:
+            lines.append(f"  Missing command: {cmd}")
+        for mod in missing_mods:
+            lines.append(f"  Missing Python module: {mod}")
+        lines.append("\nRun:\n\n    bolotype install\n")
+        raise MissingDependencyError("\n".join(lines))
+
 
 
 class VoiceTypingDaemon:
-    def __init__(self, *, language: str, backend: str, socket_path: Path, append_space: bool,
-                 command_prefix: str, start_active: bool, llm_polisher: TranscriptPolisher,
-                 llm_fail_open: bool, max_polish_characters: int) -> None:
+    def __init__(
+        self,
+        *,
+        llm_polisher: TranscriptPolisher,
+        socket_path: Path,
+        language: str = "en",
+        asr_engine: str = "moonshine",
+        asr_settings=None,
+        backend: str = "auto",
+        append_space: bool = True,
+        command_prefix: str = "",
+        start_active: bool = False,
+        llm_fail_open: bool = True,
+        max_polish_characters: int = 12000,
+    ) -> None:
         self.socket_path = socket_path
         self.latest_partial = ""
         self.active = False
@@ -62,17 +83,37 @@ class VoiceTypingDaemon:
         self.editor = VoiceEditor(text_backend, append_space=append_space, command_prefix=command_prefix)
         self.surface = LinuxAccessibilityTextSurface()
 
-        print(f"Loading Moonshine model for language={language!r}...")
-        model_path, model_arch = get_model_for_language(language)
-        self.transcriber = MicTranscriber(model_path=model_path, model_arch=model_arch)
-        self.transcriber.add_listener(AppListener(self))
+        if asr_engine == "nemotron":
+            from .asr.nemotron_asr import NemotronTranscriber
+            s = asr_settings
+            self.transcriber = NemotronTranscriber(
+                language=language,
+                model_id=s.nemotron_model_id if s else "nvidia/nemotron-3.5-asr-streaming-0.6b",
+                lookahead_tokens=s.nemotron_lookahead_tokens if s else 3,
+                vad_threshold=s.nemotron_vad_threshold if s else 0.01,
+                silence_duration_s=s.nemotron_silence_duration_s if s else 0.8,
+            )
+            print(f"ASR engine: nemotron ({self.transcriber._model_id})")
+        else:
+            from .asr.moonshine_asr import MoonshineTranscriber
+            self.transcriber = MoonshineTranscriber(language=language)
+            print("ASR engine: moonshine")
+
+        events_queue = self.events
+        self.transcriber.add_listener(lambda text: events_queue.put(("transcript", text)))
+        if hasattr(self.transcriber, "add_partial_listener"):
+            self.transcriber.add_partial_listener(self._on_partial)
 
         print(f"Text backend: {text_backend.name}")
         print("Polish commands: 'polish this line' | 'polish this paragraph' | 'polish everything' | 'polish the selection' | 'polish this'")
-        print("Undo command: 'undo that'")
-        print(f"Control socket: {self.socket_path}")
+        print("Undo command:    'undo that'")
+        print(f"Control socket:  {self.socket_path}")
         if start_active:
             self.start_listening()
+
+    def _on_partial(self, text: str) -> None:
+        self.latest_partial = text
+        self.log_partial()
 
     def log_partial(self) -> None:
         if self.latest_partial:
@@ -121,7 +162,7 @@ class VoiceTypingDaemon:
             raise
 
         if polished == original:
-            print(f"\n[polish produced no change]", flush=True)
+            print("\n[polish produced no change]", flush=True)
             return "unchanged"
 
         snapshot = PolishSnapshot(
@@ -175,7 +216,14 @@ class VoiceTypingDaemon:
                 if event_type == "transcript" and payload is not None:
                     self.process_transcript(payload)
                 elif event_type == "polish":
-                    self.polish_target(PolishTarget.ALL)
+                    target_str = payload or "all"
+                    target_map = {
+                        "line": PolishTarget.LINE,
+                        "paragraph": PolishTarget.PARAGRAPH,
+                        "all": PolishTarget.ALL,
+                        "selection": PolishTarget.SELECTION,
+                    }
+                    self.polish_target(target_map.get(target_str, PolishTarget.ALL))
                 elif event_type == "undo":
                     self.undo()
             except Exception as exc:
@@ -203,27 +251,46 @@ class VoiceTypingDaemon:
 
     def handle_control(self, request: dict) -> dict:
         action = request.get("action")
-        if action == "start": self.start_listening()
-        elif action == "stop": self.stop_listening()
-        elif action == "toggle": self.toggle()
-        elif action == "polish": self.events.put(("polish", None))
-        elif action == "undo": self.events.put(("undo", None))
-        elif action == "status": pass
-        elif action == "shutdown": self.shutdown_event.set()
-        else: return {"ok": False, "error": f"Unknown action: {action}"}
-        return {"ok": True, "active": self.active, "backend": self.editor.backend.name,
-                "partial": self.latest_partial, "queued_events": self.events.qsize(),
-                "has_polish_snapshot": self.last_polish is not None}
+        if action == "start":
+            self.start_listening()
+        elif action == "stop":
+            self.stop_listening()
+        elif action == "toggle":
+            self.toggle()
+        elif action == "polish":
+            target = request.get("target", "all")
+            self.events.put(("polish", target))
+        elif action == "undo":
+            self.events.put(("undo", None))
+        elif action == "status":
+            pass
+        elif action == "shutdown":
+            self.shutdown_event.set()
+        else:
+            return {"ok": False, "error": f"Unknown action: {action}"}
+        return {
+            "ok": True,
+            "active": self.active,
+            "backend": self.editor.backend.name,
+            "partial": self.latest_partial,
+            "queued_events": self.events.qsize(),
+            "has_polish_snapshot": self.last_polish is not None,
+        }
 
     def control_server(self) -> None:
         self.socket_path.parent.mkdir(parents=True, exist_ok=True)
         self.socket_path.unlink(missing_ok=True)
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        server.bind(str(self.socket_path)); os.chmod(self.socket_path, 0o600); server.listen(5); server.settimeout(0.5)
+        server.bind(str(self.socket_path))
+        os.chmod(self.socket_path, 0o600)
+        server.listen(5)
+        server.settimeout(0.5)
         try:
             while not self.shutdown_event.is_set():
-                try: conn, _ = server.accept()
-                except socket.timeout: continue
+                try:
+                    conn, _ = server.accept()
+                except socket.timeout:
+                    continue
                 with conn:
                     try:
                         response = self.handle_control(json.loads(conn.recv(65536).decode("utf-8")))
@@ -231,61 +298,69 @@ class VoiceTypingDaemon:
                         response = {"ok": False, "error": str(exc)}
                     conn.sendall(json.dumps(response).encode("utf-8"))
         finally:
-            server.close(); self.socket_path.unlink(missing_ok=True)
+            server.close()
+            self.socket_path.unlink(missing_ok=True)
 
     def run(self) -> None:
-        threads = [threading.Thread(target=self.control_server, daemon=True), threading.Thread(target=self.event_worker, daemon=True)]
-        for thread in threads: thread.start()
+        threads = [
+            threading.Thread(target=self.control_server, daemon=True),
+            threading.Thread(target=self.event_worker, daemon=True),
+        ]
+        for t in threads:
+            t.start()
         signal.signal(signal.SIGINT, lambda *_: self.shutdown_event.set())
         signal.signal(signal.SIGTERM, lambda *_: self.shutdown_event.set())
         print("BoloType ready. Speech inserts immediately. Say 'polish this line/paragraph/everything/the selection' to polish, 'undo that' to undo.")
-        while not self.shutdown_event.wait(0.2): pass
-        self.stop_listening(); self.transcriber.close(); self.events.put(("shutdown", None))
-        for thread in threads: thread.join(timeout=2)
+        while not self.shutdown_event.wait(0.2):
+            pass
+        self.stop_listening()
+        self.transcriber.close()
+        self.events.put(("shutdown", None))
+        for t in threads:
+            t.join(timeout=2)
         print("\n[shutdown complete]")
 
 
-def _load_prompt(path: Path | None) -> str | None:
-    return path.read_text(encoding="utf-8") if path else None
+def run_daemon(settings, *, start_active: bool = False, socket_path: Path | None = None,
+               command_prefix: str = "", llm_fail_open: bool = True) -> None:
+    check_runtime_deps()
 
+    s = settings
+    prompt_text = s.prompt_path.read_text(encoding="utf-8").strip() if s.prompt_path and s.prompt_path.exists() else None
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Moonshine Linux voice typing with AT-SPI field polishing")
-    parser.add_argument("--language", default="en")
-    parser.add_argument("--backend", choices=["auto", "xdotool", "ydotool", "wtype"], default="auto")
-    parser.add_argument("--socket", type=Path, default=DEFAULT_SOCKET)
-    parser.add_argument("--no-append-space", action="store_true")
-    parser.add_argument("--command-prefix", default="")
-    parser.add_argument("--start-active", action="store_true")
-    parser.add_argument("--llm-model", default=os.environ.get("VOICE_LLM_MODEL"))
-    parser.add_argument("--llm-base-url", default=os.environ.get("OPENAI_BASE_URL"))
-    parser.add_argument("--llm-timeout", type=float, default=float(os.environ.get("VOICE_LLM_TIMEOUT", "20")))
-    parser.add_argument("--llm-temperature", type=float, default=float(os.environ.get("VOICE_LLM_TEMPERATURE", "0")))
-    parser.add_argument("--llm-max-tokens", type=int, default=int(os.environ.get("VOICE_LLM_MAX_TOKENS", "1200")))
-    parser.add_argument("--llm-prompt-file", type=Path)
-    parser.add_argument("--llm-fail-closed", action="store_true")
-    parser.add_argument("--max-polish-characters", type=int, default=int(os.environ.get("VOICE_MAX_POLISH_CHARACTERS", "12000")))
-    return parser
+    from .llm import DEFAULT_SYSTEM_PROMPT
+    llm_cfg = LLMConfig(
+        model=s.llm.model or "",
+        base_url=s.llm.base_url,
+        api_key=s.llm.api_key or "not-needed",
+        timeout_seconds=s.llm.timeout_seconds,
+        temperature=s.llm.temperature,
+        max_output_tokens=s.llm.max_output_tokens,
+        system_prompt=prompt_text or DEFAULT_SYSTEM_PROMPT,
+    )
+    if not llm_cfg.model:
+        raise SystemExit(
+            "No LLM model configured.\n"
+            "Set VOICE_LLM_MODEL, or add 'llm.model' to ~/.bolotype/settings.json"
+        )
 
+    polisher = TranscriptPolisher(llm_cfg)
+    sock = socket_path or DEFAULT_SOCKET
 
-def main() -> None:
-    args = build_parser().parse_args()
-    if not args.llm_model:
-        raise SystemExit("Set --llm-model or VOICE_LLM_MODEL")
-    kwargs = dict(model=args.llm_model, base_url=args.llm_base_url, api_key=os.environ.get("OPENAI_API_KEY"),
-                  timeout_seconds=args.llm_timeout, temperature=args.llm_temperature, max_output_tokens=args.llm_max_tokens)
-    prompt = _load_prompt(args.llm_prompt_file)
-    if prompt is not None: kwargs["system_prompt"] = prompt
-    polisher = TranscriptPolisher(LLMConfig(**kwargs))
     try:
-        app = VoiceTypingDaemon(language=args.language, backend=args.backend, socket_path=args.socket,
-            append_space=not args.no_append_space, command_prefix=args.command_prefix,
-            start_active=args.start_active, llm_polisher=polisher,
-            llm_fail_open=not args.llm_fail_closed, max_polish_characters=max(1, args.max_polish_characters))
+        app = VoiceTypingDaemon(
+            llm_polisher=polisher,
+            socket_path=sock,
+            language=s.asr.language,
+            asr_engine=s.asr.engine,
+            asr_settings=s.asr,
+            backend=s.input.backend,
+            append_space=s.input.append_space,
+            command_prefix=command_prefix,
+            start_active=start_active,
+            llm_fail_open=llm_fail_open,
+            max_polish_characters=s.accessibility.max_text_characters,
+        )
         app.run()
     except (InjectionError, AccessibilityError) as exc:
         raise SystemExit(str(exc)) from exc
-
-
-if __name__ == "__main__":
-    main()

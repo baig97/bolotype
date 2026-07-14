@@ -1,0 +1,26 @@
+{
+  "llm": {
+    "base_url": "",
+    "api_key": "",
+    "api_key_env": "OPENAI_API_KEY",
+    "model": "",
+    "timeout_seconds": 20,
+    "temperature": 0,
+    "max_output_tokens": 1000
+  },
+  "asr": {
+    "language": "en",
+    "engine": "moonshine",
+    "nemotron_model_id": "nvidia/nemotron-3.5-asr-streaming-0.6b",
+    "nemotron_lookahead_tokens": 3,
+    "nemotron_vad_threshold": 0.01,
+    "nemotron_silence_duration_s": 1.25
+  },
+  "input": {
+    "backend": "auto",
+    "append_space": true
+  },
+  "accessibility": {
+    "max_text_characters": 12000
+  }
+}
