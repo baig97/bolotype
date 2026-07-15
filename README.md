@@ -34,7 +34,7 @@ source .venv/bin/activate
 
 pip install --upgrade pip setuptools wheel
 pip install -e .
-bolotype install
+bolotype install moonshine
 ```
 
 Edit `~/.bolotype/settings.json` and set your LLM endpoint and model name (see [Configure](#configure)), then:
@@ -51,10 +51,6 @@ Say *"hello world"* — it appears at the cursor. Say *"polish this paragraph"* 
 
 > BoloType is not yet published on PyPI. Install from source.
 
-### Moonshine ASR (default)
-
-CPU-friendly. Works out of the box on most Linux desktops.
-
 ```bash
 git clone https://github.com/baig97/bolotype.git
 cd bolotype
@@ -64,22 +60,19 @@ source .venv/bin/activate
 
 python -m pip install --upgrade pip setuptools wheel
 pip install -e .
-bolotype install
 ```
 
-`bolotype install` installs Linux system packages (`python3-pyatspi`, `xdotool`, `xclip`, etc.) via apt and creates `~/.bolotype/` with default config files.
-
-### Nemotron ASR
-
-Higher accuracy, requires a CUDA-capable GPU. After completing the Moonshine install above:
+This installs only the lightweight core (CLI, LLM client, config). Then install your ASR engine:
 
 ```bash
-pip install -e ".[nemotron]"
+bolotype install moonshine    # Moonshine — CPU-friendly, low latency (recommended)
+bolotype install nemotron     # Nemotron 3.5 — higher accuracy, requires CUDA GPU
+bolotype install              # both engines
 ```
 
-This installs: `transformers>=4.47`, `torch>=2.0`, `sounddevice>=0.4`, `librosa`, `Pillow>=9.1`.
+`bolotype install` also installs Linux system packages (`python3-pyatspi`, `xdotool`, `xclip`, etc.) via apt and creates `~/.bolotype/` with default config files.
 
-> **Note:** Nemotron has not been tested on CPU. If you do not have a GPU, use the Moonshine engine.
+> **Nemotron note:** Nemotron 3.5 has not been tested on CPU. A CUDA-capable GPU is strongly recommended. If you do not have a GPU, use Moonshine.
 
 To switch engines, set `asr.engine` in `~/.bolotype/settings.json` or use the `--asr-engine` flag:
 

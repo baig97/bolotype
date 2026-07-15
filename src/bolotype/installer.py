@@ -32,7 +32,23 @@ def _packaged_resource(name: str) -> Path:
     return Path(__file__).parent / "resources" / name
 
 
-def install() -> None:
+def _install_python_extras(extra: str) -> None:
+    # Detect editable install: pyproject.toml at repo root (src/bolotype -> src -> root)
+    repo_root = Path(__file__).parent.parent.parent
+    pyproject = repo_root / "pyproject.toml"
+    if pyproject.exists():
+        spec = f".[{extra}]"
+        cmd = [sys.executable, "-m", "pip", "install", "-e", spec]
+        cwd = str(repo_root)
+    else:
+        spec = f"bolotype[{extra}]"
+        cmd = [sys.executable, "-m", "pip", "install", spec]
+        cwd = None
+    print(f"\nInstalling Python packages: {spec}")
+    subprocess.run(cmd, check=True, cwd=cwd)
+
+
+def install(engine: str | None = None) -> None:
     # --- Platform check ---
     if sys.platform == "win32":
         print("BoloType: Windows integration is not supported yet.")
@@ -54,6 +70,10 @@ def install() -> None:
             "  pip install bolotype\n"
             "  bolotype install\n"
         )
+
+    # --- Install Python extras ---
+    extra = engine or "all"
+    _install_python_extras(extra)
 
     # --- Detect package manager ---
     if shutil.which("apt-get"):

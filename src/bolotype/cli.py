@@ -19,7 +19,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
 
-    sub.add_parser("install", help="Install Linux system dependencies and create config files")
+    install_p = sub.add_parser("install", help="Install system deps and ASR engine packages")
+    install_p.add_argument(
+        "engine",
+        nargs="?",
+        choices=["moonshine", "nemotron"],
+        default=None,
+        help="Which ASR engine to install (default: both).",
+    )
     sub.add_parser("config-path", help="Print the config directory path")
     sub.add_parser("prompt-path", help="Print the system prompt file path")
 
@@ -58,7 +65,7 @@ def main() -> None:
 
     if args.command == "install":
         from .installer import install
-        install()
+        install(engine=args.engine)
         return
 
     if args.command == "config-path":
