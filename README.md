@@ -2,6 +2,7 @@
 
 > System-wide voice typing with instant dictation and AI-powered editing.
 
+[![PyPI](https://img.shields.io/pypi/v/bolotype.svg)](https://pypi.org/project/bolotype/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 > **Platform support:** Linux only. Windows and macOS support is coming soon.
@@ -23,17 +24,13 @@
 
 ## Quickstart
 
-> Requires Ubuntu/Debian with a CUDA or CPU setup. Moonshine engine used below.
+> Requires Ubuntu/Debian. Moonshine engine used below (CPU-friendly).
 
 ```bash
-git clone https://github.com/baig97/bolotype.git
-cd bolotype
-
 python3 -m venv --system-site-packages .venv
 source .venv/bin/activate
 
-pip install --upgrade pip setuptools wheel
-pip install -e .
+pip install bolotype
 bolotype install moonshine
 ```
 
@@ -49,17 +46,11 @@ Say *"hello world"* — it appears at the cursor. Say *"polish this paragraph"* 
 
 ## Install
 
-> BoloType is not yet published on PyPI. Install from source.
-
 ```bash
-git clone https://github.com/baig97/bolotype.git
-cd bolotype
-
 python3 -m venv --system-site-packages .venv
 source .venv/bin/activate
 
-python -m pip install --upgrade pip setuptools wheel
-pip install -e .
+pip install bolotype
 ```
 
 This installs only the lightweight core (CLI, LLM client, config). Then install your ASR engine:
