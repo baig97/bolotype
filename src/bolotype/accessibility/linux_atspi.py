@@ -412,19 +412,51 @@ class LinuxAccessibilityTextSurface:
             character_count = int(text_iface.characterCount)
             text = text_iface.getText(0, character_count)
             caret = int(text_iface.caretOffset)
+            print(
+                f"[AT-SPI text] characterCount={character_count} "
+                f"caret={caret} "
+                f"first80={text[:80]!r} "
+                f"last80={text[-80:]!r}",
+                flush=True,
+            )
         except Exception as exc:
             raise AccessibilityError("Could not read focused text or caret") from exc
 
         # If the resolved node only returns U+FFFC placeholders (Chrome/Electron
         # contenteditable), search its descendants for a node with real text.
+        # Each U+FFFC in the parent maps 1:1 to a child by index, so the
+        # section-level caret directly encodes which child paragraph is focused.
         if _is_fffc_only(text):
+            section_caret = caret  # preserve before overwriting
             print(
                 f"[AT-SPI] resolved node returned only U+FFFC "
-                f"(role={safe_role_name(focused)!r}), searching descendants...",
+                f"(role={safe_role_name(focused)!r} section_caret={section_caret}), "
+                f"searching descendants...",
                 flush=True,
             )
             dump_text_subtree(focused)
-            result = find_real_text_node(focused)
+
+            result = None
+            if section_caret >= 0:
+                children = list(iter_children(focused))
+                print(
+                    f"[AT-SPI FFFC] section has {len(children)} children, "
+                    f"trying child[{section_caret}]",
+                    flush=True,
+                )
+                if section_caret < len(children):
+                    result = find_real_text_node(children[section_caret])
+                    if result is not None:
+                        print(
+                            f"[AT-SPI FFFC] child[{section_caret}] resolved to "
+                            f"role={safe_role_name(result[1])!r}",
+                            flush=True,
+                        )
+
+            if result is None:
+                print("[AT-SPI FFFC] child navigation failed, falling back to global search", flush=True)
+                result = find_real_text_node(focused)
+
             if result is None:
                 raise AccessibilityError(
                     "AT-SPI returned only U+FFFC placeholders and no descendant "
@@ -435,11 +467,17 @@ class LinuxAccessibilityTextSurface:
             editable_iface = query_editable_text(focused)
             try:
                 caret = int(text_iface.caretOffset)
+                if caret < 0:
+                    caret = len(text)
             except Exception:
-                caret = 0
+                caret = len(text)
             print(
                 f"[AT-SPI fallback] found real text in "
-                f"role={safe_role_name(focused)!r} text={text!r}",
+                f"role={safe_role_name(focused)!r} "
+                f"len={len(text)} "
+                f"caret={caret} "
+                f"first80={text[:80]!r} "
+                f"last80={text[-80:]!r}",
                 flush=True,
             )
 
