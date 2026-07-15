@@ -49,6 +49,7 @@ moonshine = [
 nemotron = [
     "transformers>=4.47",
     "torch>=2.0",
+    "accelerate>=1.14",
     "sounddevice>=0.4",
     "librosa",
     "Pillow>=9.1",
@@ -61,6 +62,7 @@ all = [
     "moonshine-voice",
     "transformers>=4.47",
     "torch>=2.0",
+    "accelerate>=1.14",
     "sounddevice>=0.4",
     "librosa",
     "Pillow>=9.1",

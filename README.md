@@ -74,12 +74,6 @@ bolotype install              # both engines
 
 > **Nemotron note:** Nemotron 3.5 has not been tested on CPU. A CUDA-capable GPU is strongly recommended. If you do not have a GPU, use Moonshine.
 
-To switch engines, set `asr.engine` in `~/.bolotype/settings.json` or use the `--asr-engine` flag:
-
-```bash
-bolotype run --asr-engine nemotron --start-active
-```
-
 ---
 
 ## Voice commands
@@ -144,7 +138,7 @@ All settings live in `~/.bolotype/settings.json`. Only set the keys you want to 
 
 | Key | Default | Description |
 |---|---|---|
-| `engine` | `"moonshine"` | ASR engine to use. `"moonshine"` or `"nemotron"`. |
+| `engine` | `"moonshine"` | ASR engine to use. `"moonshine"` or `"nemotron"`. Can also be set via `--asr-engine` flag or `BOLOTYPE_ASR_ENGINE` env var. |
 | `language` | `"en"` | Language code. Moonshine accepts `"en"`. Nemotron accepts locale codes such as `"en-US"`, `"de-DE"`, or `"auto"`. |
 | `nemotron_model_id` | `"nvidia/nemotron-3.5-asr-streaming-0.6b"` | HuggingFace model ID for Nemotron. Downloaded automatically on first run. |
 | `nemotron_lookahead_tokens` | `3` | Controls the streaming chunk size and right-context window. Supported values: `0` (80 ms), `1` (160 ms), `3` (320 ms), `6` (560 ms), `13` (1120 ms). Lower values reduce latency; higher values give the model more context. |
@@ -216,7 +210,9 @@ bolotype run --start-active
 All subcommands:
 
 ```bash
-bolotype install            # install system deps + create config
+bolotype install moonshine  # install Moonshine ASR + system deps + create config
+bolotype install nemotron   # install Nemotron ASR + system deps + create config
+bolotype install            # install both ASR engines + system deps + create config
 bolotype run                # start the daemon
 bolotype toggle             # start/stop listening
 bolotype polish             # polish entire focused field
@@ -298,4 +294,4 @@ Targeted replacement through accessibility APIs may flatten formatting or operat
 
 ## License
 
-MIT © 2026 Abdullah Baig
+MIT © 2026 Muhammad Abdullah Baig
