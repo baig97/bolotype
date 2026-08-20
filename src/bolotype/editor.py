@@ -61,20 +61,48 @@ class InsertRecord:
     text: str
     created_at: float
 
+# ---------------------------------------------------------------------------
+# Voice command matching (pure, testable — no editor/backend needed)
+# ---------------------------------------------------------------------------
+
+_UNDO_PATTERNS = {"undo that", "undo this"}
+
+_POLISH_COMMANDS: dict[str, PolishTarget] = {
+    "polish this line": PolishTarget.LINE,
+    "polish the line": PolishTarget.LINE,
+    "polish this paragraph": PolishTarget.PARAGRAPH,
+    "polish the paragraph": PolishTarget.PARAGRAPH,
+    "polish everything": PolishTarget.ALL,
+    "polish all": PolishTarget.ALL,
+    "polish the selection": PolishTarget.SELECTION,
+    "polish this selection": PolishTarget.SELECTION,
+    "polish this": PolishTarget.ALL,
+}
+
+
+def _normalize_command(text: str) -> str:
+    text = re.sub(r"[.!?]+$", "", text.strip().lower())
+    return re.sub(r"\s+", " ", text)
+
+
+def match_command(transcript: str, command_prefix: str = ""):
+    """Return ("polish", PolishCommand) | ("undo", ()) | None for a transcript."""
+    prefix = command_prefix.strip().lower()
+    text = transcript.strip()
+    if prefix:
+        if text.lower().startswith(prefix + " "):
+            text = text[len(prefix):].strip()
+        else:
+            return None
+    normalized = _normalize_command(text)
+    target = _POLISH_COMMANDS.get(normalized)
+    if target is not None:
+        return ("polish", PolishCommand(target))
+    if normalized in _UNDO_PATTERNS:
+        return ("undo", ())
+    return None
 
 class VoiceEditor:
-    _UNDO_PATTERNS = {"undo that", "undo this"}
-    _POLISH_COMMANDS: dict[str, PolishTarget] = {
-        "polish this line": PolishTarget.LINE,
-        "polish the line": PolishTarget.LINE,
-        "polish this paragraph": PolishTarget.PARAGRAPH,
-        "polish the paragraph": PolishTarget.PARAGRAPH,
-        "polish everything": PolishTarget.ALL,
-        "polish all": PolishTarget.ALL,
-        "polish the selection": PolishTarget.SELECTION,
-        "polish this selection": PolishTarget.SELECTION,
-        "polish this": PolishTarget.ALL,
-    }
 
     def __init__(self, backend: TextBackend, *, append_space: bool = True, command_prefix: str = "") -> None:
         self.backend = backend
@@ -84,30 +112,9 @@ class VoiceEditor:
         self._lock = threading.RLock()
 
     @staticmethod
-    def _normalized_command(text: str) -> str:
-        text = re.sub(r"[.!?]+$", "", text.strip().lower())
-        return re.sub(r"\s+", " ", text)
 
-    def _strip_command_prefix(self, text: str) -> tuple[bool, str]:
-        if not self.command_prefix:
-            return True, text.strip()
-        normalized = text.strip()
-        prefix = self.command_prefix
-        if normalized.lower().startswith(prefix + " "):
-            return True, normalized[len(prefix):].strip()
-        return False, normalized
-
-    def parse_voice_command(self, transcript: str) -> tuple[str, PolishCommand | tuple] | None:
-        may_be_command, command_text = self._strip_command_prefix(transcript)
-        if not may_be_command:
-            return None
-        normalized = self._normalized_command(command_text)
-        target = self._POLISH_COMMANDS.get(normalized)
-        if target is not None:
-            return ("polish", PolishCommand(target))
-        if normalized in self._UNDO_PATTERNS:
-            return ("undo", ())
-        return None
+    def parse_voice_command(self, transcript: str):
+        return match_command(transcript, self.command_prefix)
 
     def insert(self, text: str) -> None:
         with self._lock:
