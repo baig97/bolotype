@@ -65,24 +65,51 @@ class InsertRecord:
 # Voice command matching (pure, testable — no editor/backend needed)
 # ---------------------------------------------------------------------------
 
-_UNDO_PATTERNS = {"undo that", "undo this"}
+# Polite filler stripped from the ends of an utterance before matching, so
+# "please polish this paragraph" and "polish the line please" are recognised.
+_LEAD_FILLERS = ["please", "hey", "ok", "okay", "um", "uh",
+                 "can you", "could you", "would you", "will you"]
+_TRAIL_FILLERS = ["please", "now", "for me", "thanks", "thank you"]
 
-_POLISH_COMMANDS: dict[str, PolishTarget] = {
-    "polish this line": PolishTarget.LINE,
-    "polish the line": PolishTarget.LINE,
-    "polish this paragraph": PolishTarget.PARAGRAPH,
-    "polish the paragraph": PolishTarget.PARAGRAPH,
-    "polish everything": PolishTarget.ALL,
-    "polish all": PolishTarget.ALL,
-    "polish the selection": PolishTarget.SELECTION,
-    "polish this selection": PolishTarget.SELECTION,
-    "polish this": PolishTarget.ALL,
+_KEYWORD_TARGETS: dict[str, PolishTarget] = {
+    "line": PolishTarget.LINE,
+    "paragraph": PolishTarget.PARAGRAPH,
+    "selection": PolishTarget.SELECTION,
+    "everything": PolishTarget.ALL,
+    "all": PolishTarget.ALL,
 }
+
+# ^...$ anchors are the precision guard: the whole utterance must BE the
+# command. An embedded phrase ("...polish this paragraph until it shines")
+# cannot match, so real dictation is never mistaken for a command.
+_POLISH_RE = re.compile(r"^polish(?: (?:this|the|my))? (line|paragraph|selection|everything|all)$")
+_POLISH_THIS_RE = re.compile(r"^polish this$")
+_UNDO_RE = re.compile(r"^undo (that|this|it)$")
 
 
 def _normalize_command(text: str) -> str:
     text = re.sub(r"[.!?]+$", "", text.strip().lower())
     return re.sub(r"\s+", " ", text)
+
+
+def _strip_filler(s: str) -> str:
+    """Peel polite filler off both ends, repeatedly ("okay ... please")."""
+    changed = True
+    while changed:
+        changed = False
+        for f in _LEAD_FILLERS:
+            if s == f:
+                return ""
+            if s.startswith(f + " "):
+                s = s[len(f):].strip()
+                changed = True
+        for f in _TRAIL_FILLERS:
+            if s == f:
+                return ""
+            if s.endswith(" " + f):
+                s = s[:-len(f)].strip()
+                changed = True
+    return s
 
 
 def match_command(transcript: str, command_prefix: str = ""):
@@ -94,11 +121,13 @@ def match_command(transcript: str, command_prefix: str = ""):
             text = text[len(prefix):].strip()
         else:
             return None
-    normalized = _normalize_command(text)
-    target = _POLISH_COMMANDS.get(normalized)
-    if target is not None:
-        return ("polish", PolishCommand(target))
-    if normalized in _UNDO_PATTERNS:
+    s = _strip_filler(_normalize_command(text))
+    m = _POLISH_RE.match(s)
+    if m:
+        return ("polish", PolishCommand(_KEYWORD_TARGETS[m.group(1)]))
+    if _POLISH_THIS_RE.match(s):
+        return ("polish", PolishCommand(PolishTarget.ALL))
+    if _UNDO_RE.match(s):
         return ("undo", ())
     return None
 
